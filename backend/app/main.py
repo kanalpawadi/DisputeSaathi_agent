@@ -329,3 +329,11 @@ def metrics():
         avg_seconds_to_decision=round(sum(ready_secs) / len(ready_secs), 1) if ready_secs else None,
         merchant_taps=taps, merchant_minutes=taps * 1, baseline_minutes=len(cases) * 120,
         injections_blocked=flags, learning=learning)
+
+
+# ------------------------------------------------------------------ built frontend (production)
+# On a host like Render the React app is built into frontend/dist and served from here, so the
+# whole demo is one service and one link. In local development Vite serves it instead.
+_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")

@@ -22,7 +22,7 @@ RULES_FILE = BASE_DIR / "app" / "rules.yaml"
 for d in (DATA_DIR, PACK_DIR, UPLOAD_DIR, SAMPLE_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-PORT = int(os.getenv("DS_PORT", "8000"))
+PORT = int(os.getenv("DS_PORT") or os.getenv("PORT") or "8000")  # hosts like Render set PORT
 SELF_URL = os.getenv("DS_SELF_URL", f"http://127.0.0.1:{PORT}")
 
 # Shared secret used to sign webhook calls from the (mock) Paytm system.

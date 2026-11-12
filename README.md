@@ -53,6 +53,19 @@ on a card, for example handing a weak ₹150 case to Paytm's team instead of sug
 
 Other settings: `DS_STEP_DELAY` (seconds between agent steps on the live screen, default 0.7).
 
+### Deploy free on Render
+
+The `Dockerfile` builds the React app and serves it from FastAPI, so the whole demo is one service with
+one link. `render.yaml` sets it up as a free Render web service.
+
+1. Sign in at render.com with GitHub.
+2. **New → Blueprint**, pick this repository, and paste your `GROQ_API_KEY` when asked.
+3. Deploy. The link looks like `https://disputesaathi.onrender.com`.
+
+On the free plan the service sleeps after 15 minutes with no visitors, and the first visit then takes
+about a minute. Data resets on every restart (the 20 demo cases are re-created). Before a demo, open the
+link once, wait for it to load, and press **Reset**.
+
 ## Demo script (about 5 minutes)
 
 1. **Pick a case → #1** "Item not received". Watch the live steps: alert, AI reading, tool calls,

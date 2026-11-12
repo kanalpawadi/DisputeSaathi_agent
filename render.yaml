@@ -1,0 +1,12 @@
+# Render Blueprint: New -> Blueprint -> pick this repo. Render asks for GROQ_API_KEY (kept secret there).
+services:
+  - type: web
+    name: disputesaathi
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DS_LLM_PROVIDER
+        value: groq

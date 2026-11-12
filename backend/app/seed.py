@@ -133,10 +133,15 @@ def _bill_text(m, order_id, inv_id, items, amount, issued):
 def _render_bill(path, text):
     img = Image.new("RGB", (620, 520), (252, 250, 243))
     d = ImageDraw.Draw(img)
-    try:
-        font = ImageFont.truetype("arial.ttf", 22)
-    except OSError:
-        font = ImageFont.load_default()
+    font = None
+    for name in ("arial.ttf", "DejaVuSans.ttf"):  # Windows, then Linux servers (fonts-dejavu)
+        try:
+            font = ImageFont.truetype(name, 22)
+            break
+        except OSError:
+            pass
+    if font is None:
+        font = ImageFont.load_default(size=22)
     y = 30
     for line in text.split("\n"):
         d.text((36, y), line, fill=(30, 30, 30), font=font)
