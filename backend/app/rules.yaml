@@ -1,0 +1,186 @@
+# DisputeSaathi policy.
+#
+# Two parts:
+#   guardrails  - checked on EVERY action the AI agent proposes. A matching guardrail blocks the
+#                 action; the agent is told why and must pick again. The agent decides, these limit it.
+#   fight_modes - when a FIGHT is allowed, these decide whether it is sent automatically or needs
+#                 the merchant's OTP. The agent cannot choose auto-send itself.
+#   rules       - the fixed decision list used in offline mode (no AI) and as the fallback when the
+#                 agent fails. Checked top to bottom; the FIRST match wins.
+#
+# Condition ops: eq, ne, lt, lte, gt, gte, is_true, is_false
+# Values: a literal, "$name" for a threshold below, or "@name" for another fact.
+# Agent actions: FIGHT, SUGGEST_ACCEPT, REQUEST_EVIDENCE, WAIT_FOR_MERCHANT, ESCALATE.
+# ESCALATE (hand to a human) is never blocked.
+
+thresholds:
+  weak_proof: 0.6              # proof score below this = weak (score is computed by code, not the AI)
+  small_amount: 500            # "not worth fighting" range for weak proof
+  escalate_hours: 24           # proof still missing this close to the deadline -> Paytm team
+  deadline_safety_hours: 48    # merchant unreachable this close -> pre-set deadline rule applies
+
+guardrails:
+  # --- cases a human must take
+  - id: G1_FRAUD_TO_HUMAN
+    block: [FIGHT, SUGGEST_ACCEPT, REQUEST_EVIDENCE, WAIT_FOR_MERCHANT]
+    when: [{fact: reason, eq: UNAUTHORIZED}]
+    why: Fraud claims ("I didn't make this payment") always go to Paytm's team.
+
+  - id: G2_REASON_MISMATCH
+    block: [FIGHT, SUGGEST_ACCEPT, REQUEST_EVIDENCE, WAIT_FOR_MERCHANT]
+    when: [{fact: reason_mismatch, is_true: true}]
+    why: The complaint text does not match Paytm's reason code. A human must confirm the reason first.
+
+  - id: G3_LATE_AND_MISSING
+    block: [FIGHT, SUGGEST_ACCEPT, REQUEST_EVIDENCE, WAIT_FOR_MERCHANT]
+    when: [{fact: hours_left, lt: $escalate_hours}, {fact: missing_required, gt: 0}]
+    why: Required proof is missing and less than 24 hours are left. There is no time to ask; Paytm's team must take it.
+
+  - id: G4_UNREACHABLE_NO_RULE
+    block: [FIGHT, SUGGEST_ACCEPT, REQUEST_EVIDENCE, WAIT_FOR_MERCHANT]
+    when:
+      - {fact: merchant_reachable, is_false: true}
+      - {fact: hours_left, lte: $deadline_safety_hours}
+      - {fact: deadline_rule_applies, is_false: true}
+    why: The merchant cannot be reached, the deadline is close, and their pre-set deadline rule does not cover this amount.
+
+  # --- protecting the merchant's money
+  - id: G5_NO_ACCEPT_ON_STRONG_PROOF
+    block: [SUGGEST_ACCEPT]
+    when: [{fact: proof_score, gte: $weak_proof}, {fact: duplicate_confirmed, is_false: true}]
+    why: The proof is strong. Suggesting the merchant give up the money is not allowed; fight or ask a human.
+
+  - id: G6_NO_ACCEPT_BIG_AMOUNT
+    block: [SUGGEST_ACCEPT]
+    when: [{fact: amount, gt: $small_amount}, {fact: duplicate_confirmed, is_false: true}]
+    why: The amount is above the small-case limit. Only a human can decide to give it up.
+
+  - id: G7_NO_ACCEPT_AFTER_INJECTION
+    block: [SUGGEST_ACCEPT]
+    when: [{fact: injection_found, is_true: true}]
+    why: Text in this case tried to instruct the AI to accept or refund. Accepting is locked; a human must review.
+
+  # --- fairness to the customer and quality of the defence
+  - id: G8_NO_FIGHT_REAL_DUPLICATE
+    block: [FIGHT]
+    when: [{fact: duplicate_confirmed, is_true: true}]
+    why: Payment records show the customer really paid twice for one order. Fighting would be unfair.
+
+  - id: G9_NO_FIGHT_MISSING_PROOF
+    block: [FIGHT]
+    when: [{fact: missing_required, gt: 0}]
+    why: Required proof is still missing. Ask the merchant for it, or hand to a human.
+
+  - id: G10_NO_FIGHT_WEAK_PROOF
+    block: [FIGHT]
+    when: [{fact: proof_score, lt: $weak_proof}]
+    why: The proof is too weak or contradicts the merchant. Fighting would likely lose.
+
+  # --- not wasting the deadline
+  - id: G11_NOTHING_TO_ASK
+    block: [REQUEST_EVIDENCE]
+    when: [{fact: missing_required, eq: 0}]
+    why: No required proof is missing, so there is nothing to ask the merchant for.
+
+  - id: G12_ALREADY_ASKED
+    block: [REQUEST_EVIDENCE]
+    when: [{fact: evidence_requested, is_true: true}]
+    why: The merchant was already asked for this proof. Asking again would be spam; wait or hand over.
+
+  - id: G13_NOTHING_TO_WAIT_FOR
+    block: [WAIT_FOR_MERCHANT]
+    when: [{fact: evidence_requested, is_false: true}]
+    why: Nothing has been asked of the merchant, so waiting would only burn the deadline.
+
+  - id: G14_NO_WAIT_NEAR_DEADLINE
+    block: [WAIT_FOR_MERCHANT]
+    when: [{fact: merchant_reachable, is_false: true}, {fact: hours_left, lte: $deadline_safety_hours}]
+    why: The merchant is unreachable and the deadline is close. Waiting longer risks missing it.
+
+fight_modes:
+  - id: R9_DEADLINE_RULE
+    mode: DEADLINE_RULE
+    when:
+      - {fact: merchant_reachable, is_false: true}
+      - {fact: hours_left, lte: $deadline_safety_hours}
+      - {fact: deadline_rule_applies, is_true: true}
+    why: Merchant cannot be reached and the deadline is close. Sent under the rule the merchant set when joining (fight only, never accept).
+
+  - id: R11_AUTO_SEND
+    mode: AUTO_SEND
+    when: [{fact: trust_level, eq: AUTO}, {fact: amount, lte: "@auto_send_limit"}]
+    why: Amount is within the merchant's auto-send limit, and auto-send was earned.
+
+  - id: R12_ASK_MERCHANT
+    mode: NEEDS_APPROVAL
+    when: []
+    why: The merchant previews the pack and taps yes with OTP before it is sent.
+
+rules:
+  - id: R1_FRAUD
+    when: [{fact: reason, eq: UNAUTHORIZED}]
+    action: ESCALATE
+    why: Customer says they did not make this payment. Fraud claims always go to a human.
+
+  - id: R2_REASON_MISMATCH
+    when: [{fact: reason_mismatch, is_true: true}]
+    action: ESCALATE
+    why: The complaint text does not match the reason code from Paytm. A human must confirm the reason.
+
+  - id: R3_REAL_DUPLICATE
+    when: [{fact: duplicate_confirmed, is_true: true}]
+    action: SUGGEST_ACCEPT
+    why: Payment records show the same order was really paid twice. Accepting is the fair outcome; the merchant must confirm with OTP.
+
+  - id: R4_LATE_AND_MISSING
+    when: [{fact: hours_left, lt: $escalate_hours}, {fact: missing_required, gt: 0}]
+    action: ESCALATE
+    why: Required proof is missing and less than 24 hours are left. Handing over to Paytm's team now.
+
+  - id: R5_ASK_FOR_MISSING
+    when: [{fact: missing_required, gt: 0}, {fact: evidence_requested, is_false: true}]
+    action: REQUEST_EVIDENCE
+    why: Some required proof is missing. Asking the merchant for only that item.
+
+  - id: R6_WAIT_FOR_MISSING
+    when: [{fact: missing_required, gt: 0}]
+    action: WAIT_FOR_MERCHANT
+    why: Still waiting for the missing proof from the merchant; deadline is being watched.
+
+  - id: R7_WEAK_AND_SMALL
+    when: [{fact: proof_score, lt: $weak_proof}, {fact: amount, lte: $small_amount}]
+    action: SUGGEST_ACCEPT
+    why: Proof is weak and the amount is small, so fighting is not worth it. The merchant must say yes; never automatic.
+
+  - id: R8_WEAK_AND_BIG
+    when: [{fact: proof_score, lt: $weak_proof}]
+    action: ESCALATE
+    why: Proof is weak or contradicts the merchant, and the amount is too big to accept automatically. A human should review.
+
+  - id: R9_DEADLINE_RULE
+    when:
+      - {fact: merchant_reachable, is_false: true}
+      - {fact: hours_left, lte: $deadline_safety_hours}
+      - {fact: deadline_rule_enabled, is_true: true}
+      - {fact: amount, lte: "@deadline_rule_limit"}
+    action: FIGHT_AUTO
+    mode: DEADLINE_RULE
+    why: Merchant cannot be reached, deadline is close and all proof is there. Fighting under the rule the merchant set when joining (fight only, never accept).
+
+  - id: R10_DEADLINE_BIG
+    when:
+      - {fact: merchant_reachable, is_false: true}
+      - {fact: hours_left, lte: $deadline_safety_hours}
+    action: ESCALATE
+    why: Merchant cannot be reached and the amount is above their pre-set deadline-rule limit. Paytm's team must take it.
+
+  - id: R11_AUTO_SEND
+    when: [{fact: trust_level, eq: AUTO}, {fact: amount, lte: "@auto_send_limit"}]
+    action: FIGHT_AUTO
+    mode: AUTO_SEND
+    why: All proof found, amount is within the merchant's auto-send limit, and auto-send was earned.
+
+  - id: R12_ASK_MERCHANT
+    when: []
+    action: FIGHT_NEEDS_APPROVAL
+    why: All proof found. The merchant previews the pack and taps yes with OTP before it is sent.
